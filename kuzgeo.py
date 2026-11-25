@@ -386,10 +386,11 @@ def generate_full_pdf_report(sections):
     return bytes(pdf.output())
 
 # --- APP LAYOUT (TABS) ---
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Traverse Computation & Bowditch",
     "Shoelace Area Engine",
-    "2D Helmert Transformation"
+    "2D Helmert Transformation",
+    "Projection Scale Factor (UTM / Lo)"
 ])
 
 report_sections = []
@@ -787,56 +788,56 @@ with tab3:
     })
 
 # ==========================================
-# INDEPENDENT SECTION: COMBINED SCALE FACTOR
+# TAB 4: PROJECTION COMBINED SCALE FACTOR
 # ==========================================
-st.markdown("---")
-st.header("Projection Combined Scale Factor (UTM / Lo)")
-st.caption("Independent projection scale factor formula (all units in km)")
+with tab4:
+    st.header("Projection Combined Scale Factor (UTM / Lo)")
+    st.write("Compute combined scale factors for UTM or Longitude Zero (Lo) projections (all units in km).")
 
-sf_formula_type = st.radio(
-    "Select Scale Factor Formula:",
-    ["UTM Combined Scale Factor", "Lo Combined Scale Factor"],
-    horizontal=True,
-    key="sf_formula_type"
-)
-
-r_km = st.number_input("Radius of Curvature R (km)", value=6358.0, format="%.6f")
-hm_km = st.number_input("Mean Site Elevation hm (km)", value=1.2000, format="%.6f")
-
-if sf_formula_type == "UTM Combined Scale Factor":
-    c_ea, c_eb = st.columns(2)
-    ea_km = c_ea.number_input("Leftmost Point Easting EA (km)", value=500.0000, format="%.6f")
-    eb_km = c_eb.number_input("Rightmost Point Easting EB (km)", value=501.5000, format="%.6f")
-
-    sf_res = calculate_projection_scale_factor(
-        formula_type=sf_formula_type,
-        hm_km=hm_km,
-        r_km=r_km,
-        left_coord_km=ea_km,
-        right_coord_km=eb_km,
+    sf_formula_type = st.radio(
+        "Select Scale Factor Formula:",
+        ["UTM Combined Scale Factor", "Lo Combined Scale Factor"],
+        horizontal=True,
+        key="sf_formula_type"
     )
-    st.write(f"**Mean Easting (Em):** `{repr(sf_res['mean_coord'])} km` | **Reduced Easting (E'm):** `{repr(sf_res['reduced_coord'])} km`")
-    st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_res['sf'])}`")
-else:
-    c_ya, c_yb = st.columns(2)
-    ya_km = c_ya.number_input("Leftmost Point Y Coordinate YA (km)", value=100.0000, format="%.6f")
-    yb_km = c_yb.number_input("Rightmost Point Y Coordinate YB (km)", value=101.5000, format="%.6f")
 
-    sf_res = calculate_projection_scale_factor(
-        formula_type=sf_formula_type,
-        hm_km=hm_km,
-        r_km=r_km,
-        left_coord_km=ya_km,
-        right_coord_km=yb_km,
-    )
-    st.write(f"**Mean Y Coordinate (Ym):** `{repr(sf_res['mean_coord'])} km`")
-    st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_res['sf'])}`")
+    r_km = st.number_input("Radius of Curvature R (km)", value=6358.0, format="%.6f", key="sf_r_km")
+    hm_km = st.number_input("Mean Site Elevation hm (km)", value=1.2000, format="%.6f", key="sf_hm_km")
 
-report_sections.append({
-    "title": f"4. Projection Scale Factor ({sf_formula_type})",
-    "summary": sf_res["summary_lines"],
-    "tables": []
-})
+    if sf_formula_type == "UTM Combined Scale Factor":
+        c_ea, c_eb = st.columns(2)
+        ea_km = c_ea.number_input("Leftmost Point Easting EA (km)", value=500.0000, format="%.6f", key="sf_ea_km")
+        eb_km = c_eb.number_input("Rightmost Point Easting EB (km)", value=501.5000, format="%.6f", key="sf_eb_km")
+
+        sf_res = calculate_projection_scale_factor(
+            formula_type=sf_formula_type,
+            hm_km=hm_km,
+            r_km=r_km,
+            left_coord_km=ea_km,
+            right_coord_km=eb_km,
+        )
+        st.write(f"**Mean Easting (Em):** `{repr(sf_res['mean_coord'])} km` | **Reduced Easting (E'm):** `{repr(sf_res['reduced_coord'])} km`")
+        st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_res['sf'])}`")
+    else:
+        c_ya, c_yb = st.columns(2)
+        ya_km = c_ya.number_input("Leftmost Point Y Coordinate YA (km)", value=100.0000, format="%.6f", key="sf_ya_km")
+        yb_km = c_yb.number_input("Rightmost Point Y Coordinate YB (km)", value=101.5000, format="%.6f", key="sf_yb_km")
+
+        sf_res = calculate_projection_scale_factor(
+            formula_type=sf_formula_type,
+            hm_km=hm_km,
+            r_km=r_km,
+            left_coord_km=ya_km,
+            right_coord_km=yb_km,
+        )
+        st.write(f"**Mean Y Coordinate (Ym):** `{repr(sf_res['mean_coord'])} km`")
+        st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_res['sf'])}`")
+
+    report_sections.append({
+        "title": f"4. Projection Scale Factor ({sf_formula_type})",
+        "summary": sf_res["summary_lines"],
+        "tables": []
+    })
 
 # --- PDF REPORT EXPORT ---
 st.markdown("---")
