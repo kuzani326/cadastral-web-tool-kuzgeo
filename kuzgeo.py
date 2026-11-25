@@ -205,6 +205,45 @@ def calculate_lo_scale_factor(y_left_km, y_right_km, hm_km, r_km=6358.0):
     sf = 1.0 + ((y_m ** 2) / (2.0 * (r_km ** 2))) - (hm_km / r_km)
     return sf, y_m
 
+def calculate_projection_scale_factor(
+    formula_type,
+    hm_km,
+    r_km=6358.0,
+    left_coord_km=None,
+    right_coord_km=None,
+):
+    """
+    Standalone main computation function for projection combined scale factors
+    (all units in km, unrounded float).
+    formula_type: "UTM Combined Scale Factor" or "Lo Combined Scale Factor"
+    """
+    if formula_type == "UTM Combined Scale Factor":
+        sf, e_m, e_prime_m = calculate_utm_scale_factor(left_coord_km, right_coord_km, hm_km, r_km)
+        return {
+            "sf": sf,
+            "mean_coord": e_m,
+            "reduced_coord": e_prime_m,
+            "summary_lines": [
+                "Scale Factor Mode: UTM Combined Scale Factor",
+                f"EA = {repr(left_coord_km)} km, EB = {repr(right_coord_km)} km, Em = {repr(e_m)} km, E'm = {repr(e_prime_m)} km",
+                f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
+                f"Unrounded Scale Factor (SF): {repr(sf)}",
+            ],
+        }
+
+    sf, y_m = calculate_lo_scale_factor(left_coord_km, right_coord_km, hm_km, r_km)
+    return {
+        "sf": sf,
+        "mean_coord": y_m,
+        "reduced_coord": None,
+        "summary_lines": [
+            "Scale Factor Mode: Lo Combined Scale Factor",
+            f"YA = {repr(left_coord_km)} km, YB = {repr(right_coord_km)} km, Ym = {repr(y_m)} km",
+            f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
+            f"Unrounded Scale Factor (SF): {repr(sf)}",
+        ],
+    }
+
 def round_table_to_4_decimals(df, enabled=True):
     """Rounds float columns in an output DataFrame to 4 decimal places."""
     if df is None or not enabled:
@@ -769,33 +808,33 @@ if sf_formula_type == "UTM Combined Scale Factor":
     ea_km = c_ea.number_input("Leftmost Point Easting EA (km)", value=500.0000, format="%.6f")
     eb_km = c_eb.number_input("Rightmost Point Easting EB (km)", value=501.5000, format="%.6f")
 
-    sf_value, e_m_km, e_prime_m_km = calculate_utm_scale_factor(ea_km, eb_km, hm_km, r_km)
-    st.write(f"**Mean Easting (Em):** `{repr(e_m_km)} km` | **Reduced Easting (E'm):** `{repr(e_prime_m_km)} km`")
-    st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_value)}`")
-    sf_summary_lines = [
-        "Scale Factor Mode: UTM Combined Scale Factor",
-        f"EA = {repr(ea_km)} km, EB = {repr(eb_km)} km, Em = {repr(e_m_km)} km, E'm = {repr(e_prime_m_km)} km",
-        f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
-        f"Unrounded Scale Factor (SF): {repr(sf_value)}"
-    ]
+    sf_res = calculate_projection_scale_factor(
+        formula_type=sf_formula_type,
+        hm_km=hm_km,
+        r_km=r_km,
+        left_coord_km=ea_km,
+        right_coord_km=eb_km,
+    )
+    st.write(f"**Mean Easting (Em):** `{repr(sf_res['mean_coord'])} km` | **Reduced Easting (E'm):** `{repr(sf_res['reduced_coord'])} km`")
+    st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_res['sf'])}`")
 else:
     c_ya, c_yb = st.columns(2)
     ya_km = c_ya.number_input("Leftmost Point Y Coordinate YA (km)", value=100.0000, format="%.6f")
     yb_km = c_yb.number_input("Rightmost Point Y Coordinate YB (km)", value=101.5000, format="%.6f")
 
-    sf_value, y_m_km = calculate_lo_scale_factor(ya_km, yb_km, hm_km, r_km)
-    st.write(f"**Mean Y Coordinate (Ym):** `{repr(y_m_km)} km`")
-    st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_value)}`")
-    sf_summary_lines = [
-        "Scale Factor Mode: Lo Combined Scale Factor",
-        f"YA = {repr(ya_km)} km, YB = {repr(yb_km)} km, Ym = {repr(y_m_km)} km",
-        f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
-        f"Unrounded Scale Factor (SF): {repr(sf_value)}"
-    ]
+    sf_res = calculate_projection_scale_factor(
+        formula_type=sf_formula_type,
+        hm_km=hm_km,
+        r_km=r_km,
+        left_coord_km=ya_km,
+        right_coord_km=yb_km,
+    )
+    st.write(f"**Mean Y Coordinate (Ym):** `{repr(sf_res['mean_coord'])} km`")
+    st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_res['sf'])}`")
 
 report_sections.append({
     "title": f"4. Projection Scale Factor ({sf_formula_type})",
-    "summary": sf_summary_lines,
+    "summary": sf_res["summary_lines"],
     "tables": []
 })
 
