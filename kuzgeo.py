@@ -162,6 +162,67 @@ def helmert_2d_transformation(src_p1, tgt_p1, src_p2, tgt_p2, points_to_transfor
     params = {'a': a, 'b': b, 'cE': cE, 'cN': cN, 'scale': scale, 'rotation_deg': rotation_deg}
     return params, transformed_points
 
+def calculate_utm_scale_factor(e_left_km, e_right_km, hm_km, r_km=6358.0):
+    """
+    Calculates UTM Combined Scale Factor (all units in km, unrounded float):
+    Em = (EA + EB) / 2
+    E'm = Em - 500
+    SF = 0.9996 * [1 + (E'm^2) / (2 * R^2) - hm / R]
+    """
+    e_m = (e_left_km + e_right_km) / 2.0
+    e_prime_m = e_m - 500.0
+    sf = 0.9996 * (1.0 + ((e_prime_m ** 2) / (2.0 * (r_km ** 2))) - (hm_km / r_km))
+    return sf, e_m, e_prime_m
+
+def calculate_lo_scale_factor(y_left_km, y_right_km, hm_km, r_km=6358.0):
+    """
+    Calculates Longitude Zero (Lo) Combined Scale Factor (all units in km, unrounded float):
+    Ym = (YA + YB) / 2
+    SF = [1 + (Ym^2) / (2 * R^2) - hm / R]
+    """
+    y_m = (y_left_km + y_right_km) / 2.0
+    sf = 1.0 + ((y_m ** 2) / (2.0 * (r_km ** 2))) - (hm_km / r_km)
+    return sf, y_m
+
+def round_table_to_4_decimals(df, enabled):
+    """Rounds float columns in an output DataFrame to 4 decimal places when enabled."""
+    if df is None or not enabled:
+        return df
+    rounded_df = df.copy()
+    float_cols = rounded_df.select_dtypes(include=["float", "float32", "float64"]).columns
+    rounded_df[float_cols] = rounded_df[float_cols].round(4)
+    return rounded_df
+
+def load_csv_with_schema(uploaded_file, expected_cols, numeric_cols, default_df):
+    """Reads an uploaded CSV and validates/coerces required columns."""
+    if uploaded_file is None:
+        return default_df, None
+    try:
+        csv_df = pd.read_csv(uploaded_file)
+        csv_df.columns = [str(c).strip() for c in csv_df.columns]
+        missing = [c for c in expected_cols if c not in csv_df.columns]
+        if missing:
+            return default_df, f"CSV is missing required columns: {', '.join(missing)}. Expected order: {', '.join(expected_cols)}"
+        ordered_df = csv_df[expected_cols].copy()
+        for col in numeric_cols:
+            ordered_df[col] = pd.to_numeric(ordered_df[col], errors="coerce")
+        if ordered_df[numeric_cols].isna().any().any():
+            return default_df, f"CSV contains non-numeric values in numeric columns: {', '.join(numeric_cols)}"
+        return ordered_df, None
+    except Exception as exc:
+        return default_df, f"Error reading CSV file: {exc}"
+
+def render_csv_column_note(columns_spec, example_row):
+    """Displays a note clearly listing the exact column order and format for CSV import."""
+    with st.expander("Note: Required CSV Column Order & Format"):
+        st.markdown("Your `.csv` file must include a header row with columns in this **exact order**:")
+        for idx, (col_name, desc) in enumerate(columns_spec, start=1):
+            st.markdown(f"{idx}. **`{col_name}`** — {desc}")
+        st.markdown("**Header line:**")
+        st.code(",".join([c[0] for c in columns_spec]), language="text")
+        st.markdown("**Sample CSV rows:**")
+        st.code(example_row, language="text")
+
 def _pdf_safe_text(val):
     """Sanitizes strings for core Latin-1 PDF fonts."""
     text = str(val)
@@ -184,7 +245,7 @@ def _format_cell(val):
     if isinstance(val, float):
         if math.isnan(val) or math.isinf(val):
             return _pdf_safe_text(val)
-        return f"{val:.3f}"
+        return f"{val:.4f}"
     return _pdf_safe_text(val)
 
 def generate_full_pdf_report(sections):
@@ -264,6 +325,62 @@ def generate_full_pdf_report(sections):
 
     return bytes(pdf.output())
 
+# --- SCALE FACTOR & TABLE ROUNDING CONTROLS ---
+st.markdown("---")
+ctrl_col1, ctrl_col2 = st.columns([2, 1])
+
+with ctrl_col1:
+    calc_sf_toggle = st.toggle("Calculate Scale Factor (UTM / Lo Projection Formulas)", value=False)
+
+with ctrl_col2:
+    round_4_toggle = st.toggle("Round Output Tables to 4 Decimal Places", value=False)
+
+sf_value = None
+sf_mode_label = None
+sf_summary_lines = []
+
+if calc_sf_toggle:
+    with st.container(border=True):
+        st.subheader("Projection Combined Scale Factor Calculator (All Units in km)")
+        use_utm_toggle = st.toggle(
+            "Scale Factor Type: UTM Combined Scale Factor (ON) / Lo Combined Scale Factor (OFF)",
+            value=True
+        )
+
+        r_km = st.number_input("Radius of Curvature R (km)", value=6358.0, format="%.6f")
+        hm_km = st.number_input("Mean Site Elevation hm (km)", value=1.2000, format="%.6f")
+
+        if use_utm_toggle:
+            sf_mode_label = "UTM Combined Scale Factor"
+            c_ea, c_eb = st.columns(2)
+            ea_km = c_ea.number_input("Leftmost Point Easting EA (km)", value=500.0000, format="%.6f")
+            eb_km = c_eb.number_input("Rightmost Point Easting EB (km)", value=501.5000, format="%.6f")
+
+            sf_value, e_m_km, e_prime_m_km = calculate_utm_scale_factor(ea_km, eb_km, hm_km, r_km)
+            st.write(f"**Mean Easting (Em):** `{repr(e_m_km)} km` | **Reduced Easting (E'm):** `{repr(e_prime_m_km)} km`")
+            st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_value)}`")
+            sf_summary_lines = [
+                "Scale Factor Mode: UTM Combined Scale Factor",
+                f"EA = {repr(ea_km)} km, EB = {repr(eb_km)} km, Em = {repr(e_m_km)} km, E'm = {repr(e_prime_m_km)} km",
+                f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
+                f"Unrounded Scale Factor (SF): {repr(sf_value)}"
+            ]
+        else:
+            sf_mode_label = "Lo Combined Scale Factor"
+            c_ya, c_yb = st.columns(2)
+            ya_km = c_ya.number_input("Leftmost Point Y Coordinate YA (km)", value=100.0000, format="%.6f")
+            yb_km = c_yb.number_input("Rightmost Point Y Coordinate YB (km)", value=101.5000, format="%.6f")
+
+            sf_value, y_m_km = calculate_lo_scale_factor(ya_km, yb_km, hm_km, r_km)
+            st.write(f"**Mean Y Coordinate (Ym):** `{repr(y_m_km)} km`")
+            st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_value)}`")
+            sf_summary_lines = [
+                "Scale Factor Mode: Lo Combined Scale Factor",
+                f"YA = {repr(ya_km)} km, YB = {repr(yb_km)} km, Ym = {repr(y_m_km)} km",
+                f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
+                f"Unrounded Scale Factor (SF): {repr(sf_value)}"
+            ]
+
 # --- APP LAYOUT (TABS) ---
 tab1, tab2, tab3 = st.tabs([
     "Traverse Computation & Bowditch",
@@ -299,8 +416,35 @@ with tab1:
             "Easting (m)": [1000.000, 1250.000, 1250.000, 1000.000],
             "Northing (m)": [2000.000, 2000.000, 2300.000, 2300.000]
         })
-        edited_df = st.data_editor(default_coords, num_rows="dynamic", use_container_width=True)
-        tab1_tables.append(("Input Station Coordinates (Mode A)", edited_df))
+        mode_a_source = st.radio(
+            "Input Method for Station Coordinates:",
+            ["Type / Edit Table", "Import from CSV"],
+            horizontal=True,
+            key="mode_a_source"
+        )
+        render_csv_column_note(
+            [
+                ("Station", "Station name / ID (text)"),
+                ("Easting (m)", "Easting coordinate in meters (number)"),
+                ("Northing (m)", "Northing coordinate in meters (number)")
+            ],
+            "Station,Easting (m),Northing (m)\nSTN_1,1000.000,2000.000\nSTN_2,1250.000,2000.000"
+        )
+        if mode_a_source == "Import from CSV":
+            csv_a = st.file_uploader("Import Station Coordinates CSV", type=["csv"], key="csv_mode_a")
+            base_a_df, err_a = load_csv_with_schema(
+                csv_a,
+                ["Station", "Easting (m)", "Northing (m)"],
+                ["Easting (m)", "Northing (m)"],
+                default_coords
+            )
+            if err_a:
+                st.error(err_a)
+        else:
+            base_a_df = default_coords
+
+        edited_df = st.data_editor(base_a_df, num_rows="dynamic", use_container_width=True, key="editor_mode_a")
+        tab1_tables.append(("Input Station Coordinates (Mode A)", round_table_to_4_decimals(edited_df, round_4_toggle)))
         
         if len(edited_df) >= 3:
             coords_list = list(zip(edited_df["Easting (m)"], edited_df["Northing (m)"]))
@@ -328,9 +472,36 @@ with tab1:
             "Distance_m": [250.000, 300.000, 250.000, 300.000],
             "WCB_deg": [90.0, 0.0, 270.0, 180.0]
         })
-        df_legs = st.data_editor(default_legs, num_rows="dynamic", use_container_width=True)
+        mode_b_source = st.radio(
+            "Input Method for Leg Bearings & Distances:",
+            ["Type / Edit Table", "Import from CSV"],
+            horizontal=True,
+            key="mode_b_source"
+        )
+        render_csv_column_note(
+            [
+                ("Leg", "Traverse leg label, e.g. 1->2 (text)"),
+                ("Distance_m", "Leg horizontal distance in meters (number)"),
+                ("WCB_deg", "Whole Circle Bearing in decimal degrees, 0 to 360 (number)")
+            ],
+            "Leg,Distance_m,WCB_deg\n1->2,250.000,90.0\n2->3,300.000,0.0"
+        )
+        if mode_b_source == "Import from CSV":
+            csv_b = st.file_uploader("Import Bearings & Distances CSV", type=["csv"], key="csv_mode_b")
+            base_b_df, err_b = load_csv_with_schema(
+                csv_b,
+                ["Leg", "Distance_m", "WCB_deg"],
+                ["Distance_m", "WCB_deg"],
+                default_legs
+            )
+            if err_b:
+                st.error(err_b)
+        else:
+            base_b_df = default_legs
+
+        df_legs = st.data_editor(base_b_df, num_rows="dynamic", use_container_width=True, key="editor_mode_b")
         tab1_summary.append(f"Starting Coordinates: E0 = {start_e:.3f} m, N0 = {start_n:.3f} m")
-        tab1_tables.append(("Input Leg Bearings & Distances (Mode B)", df_legs))
+        tab1_tables.append(("Input Leg Bearings & Distances (Mode B)", round_table_to_4_decimals(df_legs, round_4_toggle)))
         
     else:  # Mode C
         st.subheader("1. Enter Baseline Bearing, Interior Angles & Distances")
@@ -344,9 +515,36 @@ with tab1:
             "Distance_to_Next (m)": [250.000, 300.000, 250.000, 300.000],
             "Interior_Angle (deg)": [90.0, 90.0, 90.0, 90.0]
         })
-        df_angles = st.data_editor(default_angles, num_rows="dynamic", use_container_width=True)
+        mode_c_source = st.radio(
+            "Input Method for Angles & Distances:",
+            ["Type / Edit Table", "Import from CSV"],
+            horizontal=True,
+            key="mode_c_source"
+        )
+        render_csv_column_note(
+            [
+                ("Station", "Station name / ID (text)"),
+                ("Distance_to_Next (m)", "Distance to next station in meters (number)"),
+                ("Interior_Angle (deg)", "Interior angle in decimal degrees (number)")
+            ],
+            "Station,Distance_to_Next (m),Interior_Angle (deg)\nSTN_1,250.000,90.0\nSTN_2,300.000,90.0"
+        )
+        if mode_c_source == "Import from CSV":
+            csv_c = st.file_uploader("Import Angles & Distances CSV", type=["csv"], key="csv_mode_c")
+            base_c_df, err_c = load_csv_with_schema(
+                csv_c,
+                ["Station", "Distance_to_Next (m)", "Interior_Angle (deg)"],
+                ["Distance_to_Next (m)", "Interior_Angle (deg)"],
+                default_angles
+            )
+            if err_c:
+                st.error(err_c)
+        else:
+            base_c_df = default_angles
+
+        df_angles = st.data_editor(base_c_df, num_rows="dynamic", use_container_width=True, key="editor_mode_c")
         tab1_summary.append(f"Start: E0 = {start_e:.3f} m, N0 = {start_n:.3f} m | Initial Bearing: {init_wcb:.4f} deg")
-        tab1_tables.append(("Input Angles & Distances (Mode C)", df_angles))
+        tab1_tables.append(("Input Angles & Distances (Mode C)", round_table_to_4_decimals(df_angles, round_4_toggle)))
         
         # Propagate bearings from angles
         legs = []
@@ -375,7 +573,8 @@ with tab1:
         m4.metric("ΔN Misclosure", f"{mis_n:+.4f} m")
         
         st.info(f"**Zambian Legal Standards Evaluation:** {prec_cls}")
-        st.dataframe(res_df, use_container_width=True)
+        display_res_df = round_table_to_4_decimals(res_df, round_4_toggle)
+        st.dataframe(display_res_df, use_container_width=True)
         
         # Calculate Parcel Area
         area_sqm = calculate_shoelace_area(adjusted_coords)
@@ -387,163 +586,4 @@ with tab1:
             f"Zambian Legal Standards Evaluation: {prec_cls}",
             f"Adjusted Parcel Area: {area_sqm:,.3f} m^2 ({area_ha:,.4f} ha)"
         ])
-        tab1_tables.append(("Bowditch Adjusted Traverse Table", res_df))
-        
-        st.markdown("---")
-        st.subheader("3. Adjusted Parcel Area & Interactive Map")
-        a_col1, a_col2 = st.columns(2)
-        a_col1.metric("Parcel Area (m²)", f"{area_sqm:,.3f} m²")
-        a_col2.metric("Parcel Area (Hectares)", f"{area_ha:,.4f} ha")
-        
-        # Render Map
-        lats, lons = [], []
-        base_lat, base_lon = -12.8000, 28.2000
-        for e, n in adjusted_coords:
-            lats.append(base_lat + (n - start_n) / 111000.0)
-            lons.append(base_lon + (e - start_e) / 108000.0)
-            
-        map_center = [sum(lats)/len(lats), sum(lons)/len(lons)]
-        m = folium.Map(location=map_center, zoom_start=16)
-        poly_pts = list(zip(lats, lons))
-        folium.Polygon(locations=poly_pts, color="crimson", weight=3, fill=True, fill_opacity=0.3).add_to(m)
-        for idx, (lat, lon) in enumerate(poly_pts[:-1]):
-            folium.Marker([lat, lon], popup=f"Station {idx+1}", icon=folium.Icon(color="blue")).add_to(m)
-            
-        components.html(m._repr_html_(), height=400)
-
-    report_sections.append({
-        "title": "1. Traverse Computation & Bowditch Adjustment",
-        "summary": tab1_summary,
-        "tables": tab1_tables
-    })
-
-# ==========================================
-# TAB 2: SHOELACE AREA ENGINE
-# ==========================================
-with tab2:
-    st.header("Polygon Area Engine (Gauss Shoelace Formula)")
-    st.write("Compute the rectilinear area of any parcel directly from coordinate pairs.")
-    
-    area_df = st.data_editor(
-        pd.DataFrame({
-            "Corner Point": ["P1", "P2", "P3", "P4", "P5"],
-            "Easting (m)": [4500.0, 4750.0, 4800.0, 4600.0, 4450.0],
-            "Northing (m)": [8000.0, 8050.0, 7850.0, 7700.0, 7800.0]
-        }),
-        num_rows="dynamic",
-        use_container_width=True,
-        key="shoelace_editor"
-    )
-
-    tab2_summary = []
-    tab2_tables = [("Shoelace Parcel Coordinates", area_df)]
-    
-    sh_coords = list(zip(area_df["Easting (m)"], area_df["Northing (m)"]))
-    if len(sh_coords) >= 3:
-        calc_area_sqm = calculate_shoelace_area(sh_coords)
-        calc_area_ha = calc_area_sqm / 10000.0
-        
-        res1, res2 = st.columns(2)
-        res1.metric("Calculated Area (m²)", f"{calc_area_sqm:,.2f} m²")
-        res2.metric("Calculated Area (Hectares)", f"{calc_area_ha:,.4f} ha")
-        tab2_summary.append(f"Calculated Area: {calc_area_sqm:,.2f} m^2 ({calc_area_ha:,.4f} ha)")
-
-    report_sections.append({
-        "title": "2. Shoelace Area Engine",
-        "summary": tab2_summary,
-        "tables": tab2_tables
-    })
-
-# ==========================================
-# TAB 3: 2D HELMERT TRANSFORMATION
-# ==========================================
-with tab3:
-    st.header("2D Helmert 4-Parameter Coordinate Transformation")
-    st.write("Transform local or baseline survey coordinates into National Grid / WGS84 coordinates.")
-    
-    st.subheader("1. Enter Common Control Points (Minimum 2 Points)")
-    h_col1, h_col2 = st.columns(2)
-    with h_col1:
-        st.markdown("**Control Point 1**")
-        src_e1 = st.number_input("Source E1", value=100.000, format="%.3f")
-        src_n1 = st.number_input("Source N1", value=200.000, format="%.3f")
-        tgt_e1 = st.number_input("Target E1", value=500105.200, format="%.3f")
-        tgt_n1 = st.number_input("Target N1", value=8580210.500, format="%.3f")
-        
-    with h_col2:
-        st.markdown("**Control Point 2**")
-        src_e2 = st.number_input("Source E2", value=350.000, format="%.3f")
-        src_n2 = st.number_input("Source N2", value=450.000, format="%.3f")
-        tgt_e2 = st.number_input("Target E2", value=500355.800, format="%.3f")
-        tgt_n2 = st.number_input("Target N2", value=8580460.900, format="%.3f")
-
-    st.subheader("2. Enter Source Points to Transform")
-    src_pts_df = st.data_editor(
-        pd.DataFrame({
-            "Point Name": ["Corner_A", "Corner_B", "Corner_C"],
-            "Source Easting (m)": [150.000, 220.000, 300.000],
-            "Source Northing (m)": [250.000, 310.000, 400.000]
-        }),
-        num_rows="dynamic",
-        use_container_width=True
-    )
-
-    control_pts_df = pd.DataFrame({
-        "Control Point": ["CP1", "CP2"],
-        "Source E (m)": [src_e1, src_e2],
-        "Source N (m)": [src_n1, src_n2],
-        "Target E (m)": [tgt_e1, tgt_e2],
-        "Target N (m)": [tgt_n1, tgt_n2]
-    })
-    tab3_summary = []
-    tab3_tables = [
-        ("Common Control Points", control_pts_df),
-        ("Source Points to Transform", src_pts_df)
-    ]
-    
-    pts_to_tx = list(zip(src_pts_df["Source Easting (m)"], src_pts_df["Source Northing (m)"]))
-    params, tx_results = helmert_2d_transformation((src_e1, src_n1), (tgt_e1, tgt_n1), (src_e2, src_n2), (tgt_e2, tgt_n2), pts_to_tx)
-    
-    if params:
-        st.markdown("---")
-        st.subheader("3. Transformation Parameters & Results")
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Scale Factor (s)", f"{params['scale']:.6f}")
-        p2.metric("Rotation Angle (θ)", f"{params['rotation_deg']:.4f}°")
-        p3.metric("Shifts (cE, cN)", f"{params['cE']:,.2f} m, {params['cN']:,.2f} m")
-        
-        out_records = []
-        for i, (tx_e, tx_n) in enumerate(tx_results):
-            out_records.append({
-                "Point Name": src_pts_df["Point Name"].iloc[i],
-                "Source Easting": src_pts_df["Source Easting (m)"].iloc[i],
-                "Source Northing": src_pts_df["Source Northing (m)"].iloc[i],
-                "Transformed Easting (m)": tx_e,
-                "Transformed Northing (m)": tx_n
-            })
-        tx_out_df = pd.DataFrame(out_records)
-        st.dataframe(tx_out_df, use_container_width=True)
-
-        tab3_summary.append(
-            f"Scale Factor: {params['scale']:.6f} | Rotation: {params['rotation_deg']:.4f} deg | "
-            f"Shifts (cE, cN): {params['cE']:,.2f} m, {params['cN']:,.2f} m"
-        )
-        tab3_tables.append(("Transformed Coordinates", tx_out_df))
-
-    report_sections.append({
-        "title": "3. 2D Helmert Transformation",
-        "summary": tab3_summary,
-        "tables": tab3_tables
-    })
-
-# --- PDF REPORT EXPORT ---
-st.markdown("---")
-st.subheader("Export Full PDF Report")
-st.write("Generate a PDF report containing all computation tables and summary results across the tabs.")
-pdf_bytes = generate_full_pdf_report(report_sections)
-st.download_button(
-    label="Download Full Survey Report (PDF)",
-    data=pdf_bytes,
-    file_name="Zambian_Cadastral_Survey_Report.pdf",
-    mime="application/pdf"
-)
+        tab1_tables.append(("Bowditch Adjusted Traverse Table", display_res_df))
