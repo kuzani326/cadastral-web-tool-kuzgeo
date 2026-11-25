@@ -354,9 +354,6 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 report_sections = []
-sf_value = None
-sf_mode_label = None
-sf_summary_lines = []
 
 # ==========================================
 # TAB 1: TRAVERSE COMPUTATION & BOWDITCH
@@ -639,54 +636,7 @@ with tab2:
 # TAB 3: 2D HELMERT TRANSFORMATION
 # ==========================================
 with tab3:
-    hdr_col1, hdr_col2 = st.columns([2, 2], vertical_alignment="center")
-    with hdr_col1:
-        st.header("2D Helmert Transformation")
-    with hdr_col2:
-        calc_sf_toggle = st.toggle("Calculate Scale Factor (UTM / Lo Projection Formulas)", value=False)
-
-    if calc_sf_toggle:
-        with st.container(border=True):
-            st.subheader("Projection Combined Scale Factor Calculator (All Units in km)")
-            use_utm_toggle = st.toggle(
-                "Scale Factor Type: UTM Combined Scale Factor (ON) / Lo Combined Scale Factor (OFF)",
-                value=True
-            )
-
-            r_km = st.number_input("Radius of Curvature R (km)", value=6358.0, format="%.6f")
-            hm_km = st.number_input("Mean Site Elevation hm (km)", value=1.2000, format="%.6f")
-
-            if use_utm_toggle:
-                sf_mode_label = "UTM Combined Scale Factor"
-                c_ea, c_eb = st.columns(2)
-                ea_km = c_ea.number_input("Leftmost Point Easting EA (km)", value=500.0000, format="%.6f")
-                eb_km = c_eb.number_input("Rightmost Point Easting EB (km)", value=501.5000, format="%.6f")
-
-                sf_value, e_m_km, e_prime_m_km = calculate_utm_scale_factor(ea_km, eb_km, hm_km, r_km)
-                st.write(f"**Mean Easting (Em):** `{repr(e_m_km)} km` | **Reduced Easting (E'm):** `{repr(e_prime_m_km)} km`")
-                st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_value)}`")
-                sf_summary_lines = [
-                    "Scale Factor Mode: UTM Combined Scale Factor",
-                    f"EA = {repr(ea_km)} km, EB = {repr(eb_km)} km, Em = {repr(e_m_km)} km, E'm = {repr(e_prime_m_km)} km",
-                    f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
-                    f"Unrounded Scale Factor (SF): {repr(sf_value)}"
-                ]
-            else:
-                sf_mode_label = "Lo Combined Scale Factor"
-                c_ya, c_yb = st.columns(2)
-                ya_km = c_ya.number_input("Leftmost Point Y Coordinate YA (km)", value=100.0000, format="%.6f")
-                yb_km = c_yb.number_input("Rightmost Point Y Coordinate YB (km)", value=101.5000, format="%.6f")
-
-                sf_value, y_m_km = calculate_lo_scale_factor(ya_km, yb_km, hm_km, r_km)
-                st.write(f"**Mean Y Coordinate (Ym):** `{repr(y_m_km)} km`")
-                st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_value)}`")
-                sf_summary_lines = [
-                    "Scale Factor Mode: Lo Combined Scale Factor",
-                    f"YA = {repr(ya_km)} km, YB = {repr(yb_km)} km, Ym = {repr(y_m_km)} km",
-                    f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
-                    f"Unrounded Scale Factor (SF): {repr(sf_value)}"
-                ]
-
+    st.header("2D Helmert Transformation")
     st.write("Transform local or baseline survey coordinates into National Grid / WGS84 coordinates.")
     
     st.subheader("1. Enter Common Control Points (Minimum 2 Points)")
@@ -797,12 +747,57 @@ with tab3:
         "tables": tab3_tables
     })
 
-if calc_sf_toggle and sf_value is not None:
-    report_sections.insert(0, {
-        "title": f"Projection Scale Factor ({sf_mode_label})",
-        "summary": sf_summary_lines,
-        "tables": []
-    })
+# ==========================================
+# INDEPENDENT SECTION: COMBINED SCALE FACTOR
+# ==========================================
+st.markdown("---")
+st.header("Projection Combined Scale Factor (UTM / Lo)")
+st.caption("Independent projection scale factor formula (all units in km)")
+
+sf_formula_type = st.radio(
+    "Select Scale Factor Formula:",
+    ["UTM Combined Scale Factor", "Lo Combined Scale Factor"],
+    horizontal=True,
+    key="sf_formula_type"
+)
+
+r_km = st.number_input("Radius of Curvature R (km)", value=6358.0, format="%.6f")
+hm_km = st.number_input("Mean Site Elevation hm (km)", value=1.2000, format="%.6f")
+
+if sf_formula_type == "UTM Combined Scale Factor":
+    c_ea, c_eb = st.columns(2)
+    ea_km = c_ea.number_input("Leftmost Point Easting EA (km)", value=500.0000, format="%.6f")
+    eb_km = c_eb.number_input("Rightmost Point Easting EB (km)", value=501.5000, format="%.6f")
+
+    sf_value, e_m_km, e_prime_m_km = calculate_utm_scale_factor(ea_km, eb_km, hm_km, r_km)
+    st.write(f"**Mean Easting (Em):** `{repr(e_m_km)} km` | **Reduced Easting (E'm):** `{repr(e_prime_m_km)} km`")
+    st.write(f"**Unrounded UTM Combined Scale Factor (SF):** `{repr(sf_value)}`")
+    sf_summary_lines = [
+        "Scale Factor Mode: UTM Combined Scale Factor",
+        f"EA = {repr(ea_km)} km, EB = {repr(eb_km)} km, Em = {repr(e_m_km)} km, E'm = {repr(e_prime_m_km)} km",
+        f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
+        f"Unrounded Scale Factor (SF): {repr(sf_value)}"
+    ]
+else:
+    c_ya, c_yb = st.columns(2)
+    ya_km = c_ya.number_input("Leftmost Point Y Coordinate YA (km)", value=100.0000, format="%.6f")
+    yb_km = c_yb.number_input("Rightmost Point Y Coordinate YB (km)", value=101.5000, format="%.6f")
+
+    sf_value, y_m_km = calculate_lo_scale_factor(ya_km, yb_km, hm_km, r_km)
+    st.write(f"**Mean Y Coordinate (Ym):** `{repr(y_m_km)} km`")
+    st.write(f"**Unrounded Lo Combined Scale Factor (SF):** `{repr(sf_value)}`")
+    sf_summary_lines = [
+        "Scale Factor Mode: Lo Combined Scale Factor",
+        f"YA = {repr(ya_km)} km, YB = {repr(yb_km)} km, Ym = {repr(y_m_km)} km",
+        f"hm = {repr(hm_km)} km, R = {repr(r_km)} km",
+        f"Unrounded Scale Factor (SF): {repr(sf_value)}"
+    ]
+
+report_sections.append({
+    "title": f"4. Projection Scale Factor ({sf_formula_type})",
+    "summary": sf_summary_lines,
+    "tables": []
+})
 
 # --- PDF REPORT EXPORT ---
 st.markdown("---")
