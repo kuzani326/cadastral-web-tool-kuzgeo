@@ -466,3 +466,117 @@ with tab1:
             "WCB_deg": [90.0, 0.0, 270.0, 180.0]
         })
         mode_b_source = st.radio(
+            "Input Method for Leg Bearings & Distances:",
+            ["Type / Edit Table", "Import from CSV"],
+            horizontal=True,
+            key="mode_b_source"
+        )
+        render_csv_column_note(
+            [
+                ("Leg", "Traverse leg label, e.g. 1->2 (text)"),
+                ("Distance_m", "Leg horizontal distance in meters (number)"),
+                ("WCB_deg", "Whole Circle Bearing in decimal degrees, 0 to 360 (number)")
+            ],
+            "Leg,Distance_m,WCB_deg\n1->2,250.000,90.0\n2->3,300.000,0.0"
+        )
+        if mode_b_source == "Import from CSV":
+            csv_b = st.file_uploader("Import Bearings & Distances CSV", type=["csv"], key="csv_mode_b")
+            base_b_df, err_b = load_csv_with_schema(
+                csv_b,
+                ["Leg", "Distance_m", "WCB_deg"],
+                ["Distance_m", "WCB_deg"],
+                default_legs
+            )
+            if err_b:
+                st.error(err_b)
+        else:
+            base_b_df = default_legs
+
+        df_legs = st.data_editor(base_b_df, num_rows="dynamic", use_container_width=True, key="editor_mode_b")
+        tab1_summary.append(f"Starting Coordinates: E0 = {start_e:.3f} m, N0 = {start_n:.3f} m")
+        tab1_tables.append(("Input Leg Bearings & Distances (Mode B)", round_table_to_4_decimals(df_legs)))
+        
+    else:  # Mode C
+        st.subheader("1. Enter Baseline Bearing, Interior Angles & Distances")
+        col_c1, col_c2, col_c3 = st.columns(3)
+        start_e = col_c1.number_input("Start Easting E0 (m)", value=1000.000, format="%.3f", key="c_e")
+        start_n = col_c2.number_input("Start Northing N0 (m)", value=2000.000, format="%.3f", key="c_n")
+        init_wcb = col_c3.number_input("Initial Reference Bearing (°)", value=90.0, format="%.4f")
+        
+        default_angles = pd.DataFrame({
+            "Station": ["STN_1", "STN_2", "STN_3", "STN_4"],
+            "Distance_to_Next (m)": [250.000, 300.000, 250.000, 300.000],
+            "Interior_Angle (deg)": [90.0, 90.0, 90.0, 90.0]
+        })
+        mode_c_source = st.radio(
+            "Input Method for Angles & Distances:",
+            ["Type / Edit Table", "Import from CSV"],
+            horizontal=True,
+            key="mode_c_source"
+        )
+        render_csv_column_note(
+            [
+                ("Station", "Station name / ID (text)"),
+                ("Distance_to_Next (m)", "Distance to next station in meters (number)"),
+                ("Interior_Angle (deg)", "Interior angle in decimal degrees (number)")
+            ],
+            "Station,Distance_to_Next (m),Interior_Angle (deg)\nSTN_1,250.000,90.0\nSTN_2,300.000,90.0"
+        )
+        if mode_c_source == "Import from CSV":
+            csv_c = st.file_uploader("Import Angles & Distances CSV", type=["csv"], key="csv_mode_c")
+            base_c_df, err_c = load_csv_with_schema(
+                csv_c,
+                ["Station", "Distance_to_Next (m)", "Interior_Angle (deg)"],
+                ["Distance_to_Next (m)", "Interior_Angle (deg)"],
+                default_angles
+            )
+            if err_c:
+                st.error(err_c)
+        else:
+            base_c_df = default_angles
+
+        df_angles = st.data_editor(base_c_df, num_rows="dynamic", use_container_width=True, key="editor_mode_c")
+        tab1_summary.append(f"Start: E0 = {start_e:.3f} m, N0 = {start_n:.3f} m | Initial Bearing: {init_wcb:.4f} deg")
+        tab1_tables.append(("Input Angles & Distances (Mode C)", round_table_to_4_decimals(df_angles)))
+        
+        # Propagate bearings from angles
+        legs = []
+        curr_bearing = init_wcb
+        for i in range(len(df_angles)):
+            dist = df_angles["Distance_to_Next (m)"].iloc[i]
+            stn1 = df_angles["Station"].iloc[i]
+            nxt_idx = (i + 1) % len(df_angles)
+            stn2 = df_angles["Station"].iloc[nxt_idx]
+            legs.append({"Leg": f"{stn1}->{stn2}", "Distance_m": dist, "WCB_deg": curr_bearing})
+            angle = df_angles["Interior_Angle (deg)"].iloc[i]
+            curr_bearing = (curr_bearing + 180 - angle + 360) % 360
+        df_legs = pd.DataFrame(legs)
+
+    # PROCESS BOWDITCH COMPUTATION
+    if 'df_legs' in locals() and len(df_legs) >= 3:
+        st.markdown("---")
+        st.subheader("2. Bowditch Adjustment Results")
+        
+        res_df, mis_e, mis_n, lin_mis, rel_prec, prec_cls, adjusted_coords = bowditch_traverse_adjustment(df_legs, start_e, start_n)
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Linear Misclosure (e)", f"{lin_mis:.4f} m")
+        m2.metric("Relative Precision", f"1 : {int(rel_prec):,}")
+        m3.metric("ΔE Misclosure", f"{mis_e:+.4f} m")
+        m4.metric("ΔN Misclosure", f"{mis_n:+.4f} m")
+        
+        st.info(f"**Zambian Legal Standards Evaluation:** {prec_cls}")
+        display_res_df = round_table_to_4_decimals(res_df)
+        st.dataframe(display_res_df, use_container_width=True)
+        
+        # Calculate Parcel Area
+        area_sqm = calculate_shoelace_area(adjusted_coords)
+        area_ha = area_sqm / 10000.0
+
+        tab1_summary.extend([
+            f"Linear Misclosure (e): {lin_mis:.4f} m | Relative Precision: 1:{int(rel_prec):,}",
+            f"dE Misclosure: {mis_e:+.4f} m | dN Misclosure: {mis_n:+.4f} m",
+            f"Zambian Legal Standards Evaluation: {prec_cls}",
+            f"Adjusted Parcel Area: {area_sqm:,.3f} m^2 ({area_ha:,.4f} ha)"
+        ])
+        tab1_tables.append(("Bowditch Adjusted Traverse Table", display_res_df))
